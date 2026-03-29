@@ -1,0 +1,21 @@
+FROM docker:27-cli
+
+# Installer les dépendances nécessaires
+RUN apk add --no-cache \
+    bash \
+    wget \
+    curl \
+    iproute2 \
+    ca-certificates
+
+# Créer le répertoire pour les logs
+RUN mkdir -p /var/log
+
+# Copier le script de monitoring
+COPY monitor.sh /usr/local/bin/monitor.sh
+
+# Rendre le script exécutable
+RUN chmod +x /usr/local/bin/monitor.sh
+
+# Commande par défaut
+CMD ["/usr/local/bin/monitor.sh"]
