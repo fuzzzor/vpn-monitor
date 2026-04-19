@@ -11,8 +11,9 @@ This solution solves the network connectivity issue between qBittorrent and Glue
 1. ✅ **Checks that Gluetun is active** - Continuous monitoring of the container status
 2. ✅ **Checks that the VPN is mounted** - Control of the `tun0` interface and its status
 3. ✅ **Checks VPN connectivity** - Test of the public IP to confirm the tunnel
-4. ✅ **Automatically restarts qBittorrent** - Intelligent restart if the VPN reconnects
-5. ✅ **Logs all interactions** - Complete traceability in `/var/log/monitor_vpn.log`
+4. ✅ **Checks qBittorrent WebUI** - Verifies that the interface is accessible on the configured port
+5. ✅ **Automatically restarts qBittorrent** - Intelligent restart if the VPN reconnects or if the WebUI is unreachable
+6. ✅ **Logs all interactions** - Complete traceability in `/var/log/monitor_vpn.log`
 
 ## File Structure
 
@@ -96,6 +97,7 @@ By default, monitoring checks status every 30 seconds. To modify:
 # In docker-compose.yml
 environment:
   - CHECK_INTERVAL=60  # Check every 60 seconds
+  - QBITTORRENT_PORT=8880  # WebUI port to check
 ```
 
 ### Customize container names
@@ -128,6 +130,8 @@ Example:
 [2026-03-29 14:50:15] [INFO] VPN interface (tun0) is UP in gluetun
 [2026-03-29 14:50:16] [INFO] VPN connected. Public IP: 203.0.113.42
 [2026-03-29 14:50:16] [INFO] qbittorrent is running
+[2026-03-29 14:50:16] [WARNING] qBittorrent WebUI on port 8880 is inaccessible!
+[2026-03-29 14:50:16] [INFO] Restarting qBittorrent necessary (VPN restored or WebUI inaccessible)
 ```
 
 ### Log rotation
@@ -223,9 +227,9 @@ The monitoring will automatically detect the restart and restart qBittorrent.
                  │ Yes
                  ▼
 ┌─────────────────────────────────────────┐
-│ 4. Has Gluetun just restarted?          │
+│ 4. Is qBittorrent UI accessible?        │
 └────────────────┬────────────────────────┘
-                 │ Yes
+                 │ No (or VPN just restored)
                  ▼
 ┌─────────────────────────────────────────┐
 │ 5. Restart qBittorrent                  │

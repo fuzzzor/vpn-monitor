@@ -8,6 +8,7 @@
 # Configuration
 GLUETUN_CONTAINER="Gluetun"
 QBITTORRENT_CONTAINER="qBittorrent"
+QBITTORRENT_PORT=8880
 LOG_FILE="/var/log/monitor_vpn.log"
 CHECK_INTERVAL=30  # Intervalle en secondes entre chaque vérification
 MAX_LOG_SIZE=10485760  # Taille max du fichier de logs en octets (10 MB)
@@ -122,6 +123,18 @@ check_qbittorrent_status() {
     fi
 }
 
+# Fonction pour vérifier l'accessibilité de l'interface Web de qBittorrent
+check_qbittorrent_ui() {
+    # Tentative d'accès à la WebUI via localhost à l'intérieur du container
+    docker exec "$QBITTORRENT_CONTAINER" wget -q --spider "http://localhost:$QBITTORRENT_PORT" 2>/dev/null
+    
+    if [ $? -eq 0 ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 # Variables pour suivre l'état précédent
 previous_gluetun_state=""
 previous_vpn_state=""
@@ -198,6 +211,13 @@ main_loop() {
         # 4. Vérifier l'état de qBittorrent
         if check_qbittorrent_status; then
             current_qbittorrent_state="running"
+            
+            # Vérifier l'accessibilité de la WebUI
+            if ! check_qbittorrent_ui; then
+                log_message "WARNING" "L'interface Web de qBittorrent sur le port $QBITTORRENT_PORT est inaccessible !"
+                qbittorrent_restart_needed=true
+            fi
+
             # Logger uniquement si changement d'état
             if [ "$previous_qbittorrent_state" != "running" ]; then
                 log_message "INFO" "$QBITTORRENT_CONTAINER est maintenant en cours d'exécution"
@@ -212,7 +232,7 @@ main_loop() {
         
         # 5. Redémarrer qBittorrent si nécessaire
         if [ "$qbittorrent_restart_needed" = true ] && [ "$current_gluetun_state" = "running" ] && [ "$current_vpn_state" = "up" ]; then
-            log_message "INFO" "Redémarrage de qBittorrent nécessaire (VPN restauré)"
+            log_message "INFO" "Redémarrage de qBittorrent nécessaire (VPN restauré ou WebUI inaccessible)"
             restart_qbittorrent
             qbittorrent_restart_needed=false
             current_qbittorrent_state="running"
