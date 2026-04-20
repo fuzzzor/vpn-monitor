@@ -125,10 +125,10 @@ check_qbittorrent_status() {
 
 # Fonction pour vérifier l'accessibilité de l'interface Web de qBittorrent
 check_qbittorrent_ui() {
-    # Tentative d'accès à la WebUI via localhost à l'intérieur du container
-    docker exec "$QBITTORRENT_CONTAINER" wget -q --spider "http://localhost:$QBITTORRENT_PORT" 2>/dev/null
+    # Vérifier l'accessibilité de la WebUI via l'IP de l'hôte
+    local http_code=$(curl -s -o /dev/null -w '%{http_code}\n' http://192.168.0.242:$QBITTORRENT_PORT)
     
-    if [ $? -eq 0 ]; then
+    if [ "$http_code" = "200" ]; then
         return 0
     else
         return 1
