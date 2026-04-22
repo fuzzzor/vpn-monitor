@@ -6,13 +6,19 @@
 #############################################
 
 # Configuration
-GLUETUN_CONTAINER="Gluetun"
-QBITTORRENT_CONTAINER="qBittorrent"
-QBITTORRENT_PORT=8880
+GLUETUN_CONTAINER="${GLUETUN_CONTAINER:-Gluetun}"
+QBITTORRENT_CONTAINER="${QBITTORRENT_CONTAINER:-qBittorrent}"
+QBITTORRENT_PORT="${QBITTORRENT_PORT:-8880}"
 LOG_FILE="/var/log/monitor_vpn.log"
-CHECK_INTERVAL=30  # Intervalle en secondes entre chaque vérification
+CHECK_INTERVAL="${CHECK_INTERVAL:-30}"  # Intervalle en secondes entre chaque vérification
 MAX_LOG_SIZE=10485760  # Taille max du fichier de logs en octets (10 MB)
 LOG_LINES_TO_KEEP=1000  # Nombre de lignes à conserver lors de la purge
+
+# Configuration Dockhand (optionnel - pour redéployer le stack automatiquement)
+DOCKHAND_API_URL="${DOCKHAND_API_URL:-}"  # Ex: http://192.168.0.242:5000
+DOCKHAND_API_TOKEN="${DOCKHAND_API_TOKEN:-}"
+DOCKHAND_STACK_NAME="${DOCKHAND_STACK_NAME:-qbittorrent}"
+REDEPLOY_ON_MISSING_CONTAINER="${REDEPLOY_ON_MISSING_CONTAINER:-false}"  # true/false
 
 # Fonction de logging
 log_message() {
@@ -40,6 +46,13 @@ purge_logs_if_needed() {
     fi
 }
 
+# Fonction pour vérifier si un container existe (arrêté ou en cours d'exécution)
+container_exists() {
+    local container_name="$1"
+    docker inspect "$container_name" &>/dev/null
+    return $?
+}
+
 # Fonction pour vérifier si un container est en cours d'exécution
 is_container_running() {
     local container_name="$1"
@@ -48,6 +61,34 @@ is_container_running() {
     if [ "$status" = "true" ]; then
         return 0
     else
+        return 1
+    fi
+}
+
+# Fonction pour redéployer le stack via l'API Dockhand
+redeploy_stack_via_dockhand() {
+    if [ -z "$DOCKHAND_API_URL" ] || [ -z "$DOCKHAND_API_TOKEN" ]; then
+        log_message "WARNING" "API Dockhand non configurée (DOCKHAND_API_URL ou DOCKHAND_API_TOKEN manquant)"
+        return 1
+    fi
+    
+    log_message "INFO" "Tentative de redéploiement du stack '$DOCKHAND_STACK_NAME' via Dockhand..."
+    
+    # Appeler l'API Dockhand pour redéployer le stack
+    local response=$(curl -s -X POST \
+        -H "Authorization: Bearer $DOCKHAND_API_TOKEN" \
+        -H "Content-Type: application/json" \
+        "$DOCKHAND_API_URL/api/stacks/$DOCKHAND_STACK_NAME/redeploy" 2>&1)
+    
+    local exit_code=$?
+    
+    if [ $exit_code -eq 0 ]; then
+        log_message "SUCCESS" "Redéploiement du stack '$DOCKHAND_STACK_NAME' lancé via Dockhand"
+        log_message "INFO" "Attente de 30 secondes pour que le stack se redéploie..."
+        sleep 30
+        return 0
+    else
+        log_message "ERROR" "Échec du redéploiement via Dockhand: $response"
         return 1
     fi
 }
@@ -91,12 +132,52 @@ check_vpn_connectivity() {
 
 # Fonction pour redémarrer qBittorrent
 restart_qbittorrent() {
-    log_message "INFO" "Redémarrage de $QBITTORRENT_CONTAINER..."
+    # Vérifier si le container existe
+    if ! container_exists "$QBITTORRENT_CONTAINER"; then
+        log_message "ERROR" "Le container $QBITTORRENT_CONTAINER n'existe pas !"
+        
+        # Tenter de redéployer le stack via Dockhand si configuré
+        if [ "$REDEPLOY_ON_MISSING_CONTAINER" = "true" ]; then
+            log_message "INFO" "Tentative de redéploiement du stack pour recréer $QBITTORRENT_CONTAINER..."
+            if redeploy_stack_via_dockhand; then
+                # Vérifier si le container existe maintenant
+                if container_exists "$QBITTORRENT_CONTAINER"; then
+                    log_message "SUCCESS" "Le container $QBITTORRENT_CONTAINER a été recréé via le redéploiement du stack"
+                    # Continuer avec le démarrage normal
+                else
+                    log_message "ERROR" "Le container $QBITTORRENT_CONTAINER n'a pas été recréé malgré le redéploiement"
+                    return 1
+                fi
+            else
+                log_message "ERROR" "Échec du redéploiement du stack via Dockhand"
+                return 1
+            fi
+        else
+            log_message "WARNING" "Redéploiement automatique désactivé (REDEPLOY_ON_MISSING_CONTAINER=false)"
+            return 1
+        fi
+    fi
     
-    docker restart "$QBITTORRENT_CONTAINER" 2>&1 | tee -a "$LOG_FILE"
+    # Le container existe, procéder au redémarrage ou démarrage
+    local container_status=$(docker inspect -f '{{.State.Status}}' "$QBITTORRENT_CONTAINER" 2>/dev/null)
     
-    if [ $? -eq 0 ]; then
-        log_message "SUCCESS" "$QBITTORRENT_CONTAINER redémarré avec succès"
+    if [ "$container_status" = "running" ]; then
+        log_message "INFO" "Redémarrage de $QBITTORRENT_CONTAINER..."
+        docker_output=$(docker restart "$QBITTORRENT_CONTAINER" 2>&1)
+        docker_exit_code=$?
+    else
+        log_message "INFO" "Démarrage de $QBITTORRENT_CONTAINER..."
+        docker_output=$(docker start "$QBITTORRENT_CONTAINER" 2>&1)
+        docker_exit_code=$?
+    fi
+    
+    # Logger la sortie Docker
+    if [ -n "$docker_output" ]; then
+        echo "$docker_output" | tee -a "$LOG_FILE"
+    fi
+    
+    if [ $docker_exit_code -eq 0 ]; then
+        log_message "SUCCESS" "$QBITTORRENT_CONTAINER démarré avec succès"
         
         # Attendre que le container soit vraiment démarré
         sleep 5
@@ -109,7 +190,7 @@ restart_qbittorrent() {
             return 1
         fi
     else
-        log_message "ERROR" "Échec du redémarrage de $QBITTORRENT_CONTAINER"
+        log_message "ERROR" "Échec du démarrage de $QBITTORRENT_CONTAINER (code: $docker_exit_code)"
         return 1
     fi
 }
@@ -142,7 +223,7 @@ previous_qbittorrent_state=""
 previous_vpn_ip=""
 qbittorrent_restart_needed=false
 heartbeat_counter=0
-HEARTBEAT_INTERVAL=20  # Logger un heartbeat toutes les 20 itérations (10 minutes si CHECK_INTERVAL=30s)
+HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-2}  # Nombre d'itérations entre chaque heartbeat (défaut: 2)
 
 # Fonction principale de monitoring
 main_loop() {
@@ -228,14 +309,28 @@ main_loop() {
             if [ "$previous_qbittorrent_state" != "stopped" ]; then
                 log_message "WARNING" "$QBITTORRENT_CONTAINER n'est pas en cours d'exécution"
             fi
+            
+            # Si qBittorrent est arrêté et que le VPN est actif, programmer un redémarrage
+            if [ "$current_gluetun_state" = "running" ] && [ "$current_vpn_state" = "up" ]; then
+                qbittorrent_restart_needed=true
+            fi
         fi
         
-        # 5. Redémarrer qBittorrent si nécessaire
+        # 5. Redémarrer/démarrer qBittorrent si nécessaire
         if [ "$qbittorrent_restart_needed" = true ] && [ "$current_gluetun_state" = "running" ] && [ "$current_vpn_state" = "up" ]; then
-            log_message "INFO" "Redémarrage de qBittorrent nécessaire (VPN restauré ou WebUI inaccessible)"
-            restart_qbittorrent
-            qbittorrent_restart_needed=false
-            current_qbittorrent_state="running"
+            if [ "$current_qbittorrent_state" = "stopped" ]; then
+                log_message "INFO" "Démarrage de qBittorrent nécessaire (container arrêté)"
+            else
+                log_message "INFO" "Redémarrage de qBittorrent nécessaire (VPN restauré ou WebUI inaccessible)"
+            fi
+            
+            if restart_qbittorrent; then
+                # Le redémarrage a réussi, réinitialiser le flag
+                qbittorrent_restart_needed=false
+            else
+                # Le redémarrage a échoué, on réessaiera au prochain cycle
+                log_message "WARNING" "Le redémarrage a échoué, nouvelle tentative au prochain cycle..."
+            fi
         fi
         
         # Sauvegarder l'état actuel pour le prochain cycle
