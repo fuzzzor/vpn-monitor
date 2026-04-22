@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  vpn-monitor:
+    image: fuzzzor/vpn-monitor:latest
+    container_name: vpn-monitor
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /volume1/docker/monitor_vpn/logs:/var/log
+    environment:
+      # Configuration des containers à surveiller
+      - GLUETUN_CONTAINER=Gluetun
+      - QBITTORRENT_CONTAINER=qBittorrent
+      - QBITTORRENT_PORT=8880
+      
+      # Intervalle de vérification et heartbeat
+      - CHECK_INTERVAL=300          # Vérification toutes les 5 minutes
+      - HEARTBEAT_INTERVAL=2        # Log heartbeat toutes les 10 minutes (2 × 300s)
+      
+      # Timezone
+      - TZ=Europe/Paris
+      
+      # Intégration Dockhand (optionnel)
+      - REDEPLOY_ON_MISSING_CONTAINER=true
+      - DOCKHAND_API_URL=http://192.168.0.242:9900
+      - DOCKHAND_API_TOKEN=dh_votre_token_ici  # Remplacez par votre token
+      - DOCKHAND_STACK_NAME=qbittorrent        # Nom du stack à redéployer (PAS celui-ci !)
+    restart: unless-stopped
+    networks:
+      - monitoring
+
+networks:
+  monitoring:
+    driver: bridge

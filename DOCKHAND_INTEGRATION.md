@@ -4,6 +4,26 @@
 
 Le script de monitoring peut maintenant redéployer automatiquement le stack via l'API Dockhand si le container qBittorrent n'existe pas.
 
+## ⚠️ Architecture importante
+
+**Le container vpn-monitor DOIT être dans un stack séparé** du stack qbittorrent !
+
+Sinon, quand le script redéploie le stack qbittorrent, vpn-monitor sera également redéployé, ce qui :
+- Interrompt le script en plein milieu
+- Réinitialise tous les états et compteurs
+- Peut créer une boucle infinie de redéploiements
+
+### Architecture recommandée
+
+```
+Stack 1: vpn-monitor (séparé)
+  └── vpn-monitor container
+
+Stack 2: qbittorrent (surveillé)
+  ├── Gluetun
+  └── qBittorrent
+```
+
 ## Configuration
 
 ### Variables d'environnement
@@ -27,7 +47,7 @@ monitor:
     
     # Configuration Dockhand (optionnel)
     - REDEPLOY_ON_MISSING_CONTAINER=true
-    - DOCKHAND_API_URL=http://192.168.0.242:5000
+    - DOCKHAND_API_URL=http://192.168.0.242:9900
     - DOCKHAND_API_TOKEN=votre_token_dockhand
     - DOCKHAND_STACK_NAME=qbittorrent
   restart: unless-stopped
@@ -102,14 +122,24 @@ Si `REDEPLOY_ON_MISSING_CONTAINER=true` :
 [2026-04-22 14:06:07] [SUCCESS] qBittorrent démarré avec succès
 ```
 
+## Endpoint API utilisé
+
+Le script utilise l'endpoint Dockhand suivant pour redéployer le stack :
+```
+POST /api/stacks/{nom}/deploy?env=1
+```
+
+Vous pouvez tester manuellement avec :
+```bash
+curl -X POST "http://192.168.0.242:9900/api/stacks/qbittorrent/deploy?env=1" -H "Authorization: Bearer VOTRE_TOKEN" -H "Content-Type: application/json" -d '{}'
+```
+
 ## Obtenir un token Dockhand
 
-1. Connectez-vous à l'interface Dockhand
+1. Connectez-vous à l'interface Dockhand (http://192.168.0.242:9900)
 2. Allez dans **Settings** → **API Tokens**
-3. Créez un nouveau token avec les permissions :
-   - `stacks:read`
-   - `stacks:deploy`
-4. Copiez le token généré
+3. Créez un nouveau token avec un nom descriptif (ex: "VPN Monitor - Auto Redeploy")
+4. Copiez le token généré (il commence par `dh_`)
 
 ## Sécurité
 

@@ -1,256 +1,132 @@
-# Gluetun + qBittorrent Monitoring Solution
+# VPN Monitor pour Gluetun + qBittorrent
 
-## Description
+Surveillance automatique de Gluetun et qBittorrent avec redémarrage intelligent et intégration Dockhand optionnelle.
 
-This solution solves the network connectivity issue between qBittorrent and Gluetun when the VPN container restarts or updates. A monitoring container continuously monitors the VPN status and automatically restarts qBittorrent if necessary.
+## Fonctionnalités
 
-## Features
+- ✅ Surveillance de l'état de Gluetun (container en cours d'exécution)
+- ✅ Vérification de l'interface VPN (tun0/wg0)
+- ✅ Test de connectivité VPN (IP publique)
+- ✅ Surveillance de qBittorrent (container + WebUI)
+- ✅ Redémarrage automatique de qBittorrent si le VPN se reconnecte
+- ✅ Détection correcte des erreurs Docker
+- ✅ Logs uniquement sur changements d'état (évite le spam)
+- ✅ Heartbeat périodique pour confirmer que le monitoring est actif
+- ✅ **Redéploiement automatique du stack via Dockhand** si qBittorrent n'existe pas
 
-### The monitoring container:
+## Architecture recommandée
 
-1. ✅ **Checks that Gluetun is active** - Continuous monitoring of the container status
-2. ✅ **Checks that the VPN is mounted** - Control of the `tun0` interface and its status
-3. ✅ **Checks VPN connectivity** - Test of the public IP to confirm the tunnel
-4. ✅ **Checks qBittorrent WebUI** - Verifies that the interface is accessible on the configured port
-5. ✅ **Automatically restarts qBittorrent** - Intelligent restart if the VPN reconnects or if the WebUI is unreachable
-6. ✅ **Logs all interactions** - Complete traceability in `/var/log/monitor_vpn.log`
-
-## File Structure
+**Important** : Le container vpn-monitor doit être dans un **stack séparé** pour éviter qu'il se redéploie lui-même.
 
 ```
-.
-├── docker-compose.yml              # Complete Docker Compose configuration
-├── Dockerfile.monitor              # Docker image for monitoring
-├── monitor.sh                      # Monitoring script
-├── README_MONITORING.md            # This file
-└── logs/                           # Logs directory (created automatically)
-    └── monitor_vpn.log             # Log file
+Stack 1: vpn-monitor (ce repository)
+  └── vpn-monitor container
+
+Stack 2: qbittorrent (stack surveillé)
+  ├── Gluetun
+  └── qBittorrent
 ```
 
+## Déploiement
 
-### 1. Permissions (Linux/Mac)
-
-Make sure the script is executable:
+### Option 1 : Docker Compose (Recommandé)
 
 ```bash
-chmod +x monitor_gluetun_qbittorrent.sh
+# 1. Cloner ce repository
+git clone https://github.com/VOTRE_USERNAME/vpn-monitor.git
+cd vpn-monitor
+
+# 2. Modifier docker-compose.monitor.yml avec votre configuration
+nano docker-compose.monitor.yml
+
+# 3. Déployer le stack
+docker compose -f docker-compose.monitor.yml -p vpn-monitor up -d
 ```
 
-### 2. Starting the services
-
-Start all containers:
+### Option 2 : Docker Run
 
 ```bash
-docker-compose up -d
+docker run -d \
+  --name vpn-monitor \
+  --restart unless-stopped \
+  -v /var/run/docker.sock:/var/run/docker.sock:ro \
+  -v /volume1/docker/monitor_vpn/logs:/var/log \
+  -e GLUETUN_CONTAINER=Gluetun \
+  -e QBITTORRENT_CONTAINER=qBittorrent \
+  -e QBITTORRENT_PORT=8880 \
+  -e CHECK_INTERVAL=300 \
+  -e HEARTBEAT_INTERVAL=2 \
+  -e TZ=Europe/Paris \
+  fuzzzor/vpn-monitor:latest
 ```
 
-Or to rebuild the monitoring image:
+### Option 3 : Via Dockhand
 
-```bash
-docker-compose up -d --build
-```
+1. Uploadez le fichier [`docker-compose.monitor.yml`](docker-compose.monitor.yml) dans Dockhand
+2. Créez un nouveau stack nommé "vpn-monitor"
+3. Configurez les variables d'environnement
+4. Déployez
 
-## Checking operation
+## Configuration
 
-### Consult monitoring logs
+Voir [`DOCKHAND_INTEGRATION.md`](DOCKHAND_INTEGRATION.md) pour la documentation complète.
 
-```bash
-# Real-time logs
-docker-compose logs -f monitor
+### Variables d'environnement essentielles
 
-# Or directly the log file
-tail -f ./logs/monitor_vpn.log
-```
+| Variable | Description | Défaut |
+|----------|-------------|--------|
+| `GLUETUN_CONTAINER` | Nom du container Gluetun | `Gluetun` |
+| `QBITTORRENT_CONTAINER` | Nom du container qBittorrent | `qBittorrent` |
+| `QBITTORRENT_PORT` | Port WebUI qBittorrent | `8880` |
+| `CHECK_INTERVAL` | Intervalle de vérification (secondes) | `30` |
+| `HEARTBEAT_INTERVAL` | Nombre d'itérations entre heartbeats | `2` |
 
-### Check container status
+### Variables pour l'intégration Dockhand (optionnel)
 
-```bash
-docker-compose ps
-```
-
-All containers should be in `Up` state.
-
-### Test automatic restart
-
-1. Manually restart Gluetun:
-   ```bash
-   docker restart gluetun
-   ```
-
-2. Observe monitoring logs:
-   ```bash
-   docker-compose logs -f monitor
-   ```
-
-3. You should see:
-   - Detection that Gluetun has restarted
-   - VPN interface verification
-   - Automatic restart of qBittorrent
-
-## Advanced Configuration
-
-### Modify check interval
-
-By default, monitoring checks status every 30 seconds. To modify:
-
-```yaml
-# In docker-compose.yml
-environment:
-  - CHECK_INTERVAL=60  # Check every 60 seconds
-  - QBITTORRENT_PORT=8880  # WebUI port to check
-```
-
-### Customize container names
-
-If your containers have different names:
-
-```yaml
-# In docker-compose.yml
-environment:
-  - GLUETUN_CONTAINER=my_gluetun
-  - QBITTORRENT_CONTAINER=my_qbittorrent
-```
-
-Also modify the `container_name` in the corresponding services.
+| Variable | Description | Requis |
+|----------|-------------|--------|
+| `REDEPLOY_ON_MISSING_CONTAINER` | Active le redéploiement auto | Non |
+| `DOCKHAND_API_URL` | URL de l'API Dockhand | Oui si activé |
+| `DOCKHAND_API_TOKEN` | Token API Dockhand | Oui si activé |
+| `DOCKHAND_STACK_NAME` | Stack à redéployer | Non |
 
 ## Logs
 
-### Log format
-
-The logs include:
-- **Timestamp** - Precise date and time
-- **Level** - INFO, WARNING, ERROR, SUCCESS
-- **Message** - Description of the action or event
-
-Example:
-```
-[2026-03-29 14:50:15] [INFO] === Starting Gluetun + qBittorrent monitoring ===
-[2026-03-29 14:50:15] [INFO] Check interval: 30s
-[2026-03-29 14:50:15] [INFO] --- Start of verification cycle ---
-[2026-03-29 14:50:15] [INFO] VPN interface (tun0) is UP in gluetun
-[2026-03-29 14:50:16] [INFO] VPN connected. Public IP: 203.0.113.42
-[2026-03-29 14:50:16] [INFO] qbittorrent is running
-[2026-03-29 14:50:16] [WARNING] qBittorrent WebUI on port 8880 is inaccessible!
-[2026-03-29 14:50:16] [INFO] Restarting qBittorrent necessary (VPN restored or WebUI inaccessible)
+### Voir les logs en temps réel
+```bash
+docker logs -f vpn-monitor
 ```
 
-### Log rotation
+### Voir les logs persistants
+```bash
+tail -f /volume1/docker/monitor_vpn/logs/monitor_vpn.log
+```
 
-To avoid the log file becoming too large, you can configure logrotate or simply clean periodically:
+### Exemples de logs
+
+```
+[2026-04-22 15:01:11] [INFO] === Démarrage du monitoring Gluetun + qBittorrent ===
+[2026-04-22 15:01:11] [INFO] Intervalle de vérification: 300s
+[2026-04-22 15:01:11] [INFO] Gluetun est maintenant en cours d'exécution
+[2026-04-22 15:01:11] [INFO] Interface VPN (tun0) est maintenant UP
+[2026-04-22 15:01:11] [INFO] VPN connecté. IP publique: 91.148.244.84
+[2026-04-22 15:11:20] [INFO] Monitoring actif - Gluetun: running, VPN: up, qBittorrent: running
+```
+
+## Build local
 
 ```bash
-# Clear the logs
-> ./logs/monitor_vpn.log
+# Build l'image
+docker build -t vpn-monitor:local -f Dockerfile.monitor .
 
-# Or with the running container
-docker exec monitor_vpn sh -c "> /var/log/monitor_vpn.log"
+# Run en local
+docker run -d --name vpn-monitor-test vpn-monitor:local
 ```
 
-## 🛠️ Troubleshooting
+## Contribuer
 
-### The monitoring does not start
-
-Check that the Docker socket is accessible:
-```bash
-docker-compose logs monitor
-```
-
-### qBittorrent is not restarted
-
-1. Check the monitoring logs
-2. Make sure Gluetun is properly started and the VPN connected
-3. Check the container names in the configuration
-
-### Permission error
-
-On Linux, you may need to adjust permissions:
-```bash
-sudo chown -R $USER:$USER ./logs
-chmod 755 ./logs
-```
-
-### The VPN does not connect
-
-Check Gluetun's logs:
-```bash
-docker-compose logs gluetun
-```
-
-Make sure your VPN credentials are correct.
-
-## Update
-
-### Update Gluetun
-
-With Watchtower or manually:
-
-```bash
-docker-compose pull gluetun
-docker-compose up -d gluetun
-```
-
-The monitoring will automatically detect the restart and restart qBittorrent.
-
-### Update the monitoring script
-
-1. Modify [`monitor.sh`](monitor.sh)
-2. Rebuild and restart:
-   ```bash
-   docker-compose up -d --build monitor
-   ```
-
-## Important notes
-
-- **Security**: The Docker socket is mounted read-only (`ro`) to limit risks
-- **Network**: qBittorrent uses `network_mode: "service:gluetun"` to go through the VPN
-- **Restart**: The monitoring only restarts qBittorrent if Gluetun AND the VPN are operational
-- **Performance**: The 30-second interval is a good compromise between responsiveness and system load
-
-## How it works
-
-### Verification Cycle
-
-```
-┌─────────────────────────────────────────┐
-│ 1. Is Gluetun running?                  │
-└────────────────┬────────────────────────┘
-                 │ Yes
-                 ▼
-┌─────────────────────────────────────────┐
-│ 2. Is the VPN interface (tun0) UP?      │
-└────────────────┬────────────────────────┘
-                 │ Yes
-                 ▼
-┌─────────────────────────────────────────┐
-│ 3. Does the VPN have connectivity?      │
-└────────────────┬────────────────────────┘
-                 │ Yes
-                 ▼
-┌─────────────────────────────────────────┐
-│ 4. Is qBittorrent UI accessible?        │
-└────────────────┬────────────────────────┘
-                 │ No (or VPN just restored)
-                 ▼
-┌─────────────────────────────────────────┐
-│ 5. Restart qBittorrent                  │
-└─────────────────────────────────────────┘
-                 │
-                 ▼
-        Wait 30 seconds
-                 │
-                 └──────┐
-                        │
-                        ▼
-              Restart the cycle
-```
-
-## Support
-
-For any questions or issues:
-1. Check the logs: `docker-compose logs`
-2. Check the [Gluetun documentation](https://github.com/qdm12/gluetun)
-3. Check the [qBittorrent documentation](https://github.com/linuxserver/docker-qbittorrent)
+Les contributions sont les bienvenues ! N'hésitez pas à ouvrir une issue ou une pull request.
 
 ## License
 
-This script is provided as is, without warranty. Use it at your own risk.
+MIT

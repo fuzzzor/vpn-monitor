@@ -75,20 +75,27 @@ redeploy_stack_via_dockhand() {
     log_message "INFO" "Tentative de redéploiement du stack '$DOCKHAND_STACK_NAME' via Dockhand..."
     
     # Appeler l'API Dockhand pour redéployer le stack
+    # Format: POST /api/stacks/{nom}/deploy?env=1 avec un corps JSON vide
     local response=$(curl -s -X POST \
         -H "Authorization: Bearer $DOCKHAND_API_TOKEN" \
         -H "Content-Type: application/json" \
-        "$DOCKHAND_API_URL/api/stacks/$DOCKHAND_STACK_NAME/redeploy" 2>&1)
+        -d '{}' \
+        "$DOCKHAND_API_URL/api/stacks/$DOCKHAND_STACK_NAME/deploy?env=1" 2>&1)
     
     local exit_code=$?
     
-    if [ $exit_code -eq 0 ]; then
+    # Vérifier si la réponse contient une erreur
+    if echo "$response" | grep -qi "error\|failed"; then
+        log_message "ERROR" "Échec du redéploiement via Dockhand: $response"
+        return 1
+    elif [ $exit_code -eq 0 ]; then
         log_message "SUCCESS" "Redéploiement du stack '$DOCKHAND_STACK_NAME' lancé via Dockhand"
+        log_message "INFO" "Réponse API: $response"
         log_message "INFO" "Attente de 30 secondes pour que le stack se redéploie..."
         sleep 30
         return 0
     else
-        log_message "ERROR" "Échec du redéploiement via Dockhand: $response"
+        log_message "ERROR" "Échec de la connexion à l'API Dockhand (code: $exit_code)"
         return 1
     fi
 }
