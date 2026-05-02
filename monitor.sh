@@ -336,8 +336,9 @@ main_loop() {
             fi
             
             if restart_qbittorrent; then
-                # Le redémarrage a réussi, réinitialiser le flag
+                # Le redémarrage a réussi, réinitialiser le flag et mettre à jour l'état
                 qbittorrent_restart_needed=false
+                current_qbittorrent_state="running"
             else
                 # Le redémarrage a échoué, on réessaiera au prochain cycle
                 log_message "WARNING" "Le redémarrage a échoué, nouvelle tentative au prochain cycle..."
