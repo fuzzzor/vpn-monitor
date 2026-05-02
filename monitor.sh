@@ -18,7 +18,7 @@ LOG_LINES_TO_KEEP=1000  # Nombre de lignes à conserver lors de la purge
 DOCKHAND_API_URL="${DOCKHAND_API_URL:-}"  # Ex: http://192.168.0.242:5000
 DOCKHAND_API_TOKEN="${DOCKHAND_API_TOKEN:-}"
 DOCKHAND_STACK_NAME="${DOCKHAND_STACK_NAME:-qbittorrent}"
-REDEPLOY_ON_MISSING_CONTAINER="${REDEPLOY_ON_MISSING_CONTAINER:-false}"  # true/false
+REDEPLOY_ON_MISSING_CONTAINER="${REDEPLOY_ON_MISSING_CONTAINER:-true}"  # true/false
 
 # Fonction de logging
 log_message() {
@@ -139,67 +139,71 @@ check_vpn_connectivity() {
 
 # Fonction pour redémarrer qBittorrent
 restart_qbittorrent() {
+    local max_retries=3
+    local retry_count=0
+    local success=false
+
     # Vérifier si le container existe
     if ! container_exists "$QBITTORRENT_CONTAINER"; then
         log_message "ERROR" "Le container $QBITTORRENT_CONTAINER n'existe pas !"
-        
-        # Tenter de redéployer le stack via Dockhand si configuré
         if [ "$REDEPLOY_ON_MISSING_CONTAINER" = "true" ]; then
-            log_message "INFO" "Tentative de redéploiement du stack pour recréer $QBITTORRENT_CONTAINER..."
+            log_message "INFO" "Tentative de redéploiement immédiat car le container est manquant..."
             if redeploy_stack_via_dockhand; then
-                # Vérifier si le container existe maintenant
-                if container_exists "$QBITTORRENT_CONTAINER"; then
-                    log_message "SUCCESS" "Le container $QBITTORRENT_CONTAINER a été recréé via le redéploiement du stack"
-                    # Continuer avec le démarrage normal
-                else
-                    log_message "ERROR" "Le container $QBITTORRENT_CONTAINER n'a pas été recréé malgré le redéploiement"
-                    return 1
-                fi
-            else
-                log_message "ERROR" "Échec du redéploiement du stack via Dockhand"
-                return 1
+                return 0
             fi
-        else
-            log_message "WARNING" "Redéploiement automatique désactivé (REDEPLOY_ON_MISSING_CONTAINER=false)"
-            return 1
         fi
-    fi
-    
-    # Le container existe, procéder au redémarrage ou démarrage
-    local container_status=$(docker inspect -f '{{.State.Status}}' "$QBITTORRENT_CONTAINER" 2>/dev/null)
-    
-    if [ "$container_status" = "running" ]; then
-        log_message "INFO" "Redémarrage de $QBITTORRENT_CONTAINER..."
-        docker_output=$(docker restart "$QBITTORRENT_CONTAINER" 2>&1)
-        docker_exit_code=$?
-    else
-        log_message "INFO" "Démarrage de $QBITTORRENT_CONTAINER..."
-        docker_output=$(docker start "$QBITTORRENT_CONTAINER" 2>&1)
-        docker_exit_code=$?
-    fi
-    
-    # Logger la sortie Docker
-    if [ -n "$docker_output" ]; then
-        echo "$docker_output" | tee -a "$LOG_FILE"
-    fi
-    
-    if [ $docker_exit_code -eq 0 ]; then
-        log_message "SUCCESS" "$QBITTORRENT_CONTAINER démarré avec succès"
-        
-        # Attendre que le container soit vraiment démarré
-        sleep 5
-        
-        if is_container_running "$QBITTORRENT_CONTAINER"; then
-            log_message "SUCCESS" "$QBITTORRENT_CONTAINER est maintenant en cours d'exécution"
-            return 0
-        else
-            log_message "ERROR" "$QBITTORRENT_CONTAINER n'a pas démarré correctement"
-            return 1
-        fi
-    else
-        log_message "ERROR" "Échec du démarrage de $QBITTORRENT_CONTAINER (code: $docker_exit_code)"
         return 1
     fi
+    
+    # Boucle de tentatives de démarrage
+    while [ $retry_count -lt $max_retries ]; do
+        retry_count=$((retry_count + 1))
+        
+        local container_status=$(docker inspect -f '{{.State.Status}}' "$QBITTORRENT_CONTAINER" 2>/dev/null)
+        
+        if [ "$container_status" = "running" ]; then
+            log_message "INFO" "[$retry_count/$max_retries] Redémarrage de $QBITTORRENT_CONTAINER..."
+            docker_output=$(docker restart "$QBITTORRENT_CONTAINER" 2>&1)
+        else
+            log_message "INFO" "[$retry_count/$max_retries] Démarrage de $QBITTORRENT_CONTAINER..."
+            docker_output=$(docker start "$QBITTORRENT_CONTAINER" 2>&1)
+        fi
+        
+        local docker_exit_code=$?
+        
+        if [ $docker_exit_code -eq 0 ]; then
+            # Attendre que le container soit vraiment démarré et stable
+            sleep 5
+            if is_container_running "$QBITTORRENT_CONTAINER"; then
+                log_message "SUCCESS" "$QBITTORRENT_CONTAINER démarré avec succès après $retry_count tentative(s)"
+                return 0
+            fi
+        fi
+        
+        log_message "WARNING" "Tentative $retry_count échouée pour $QBITTORRENT_CONTAINER"
+        [ -n "$docker_output" ] && echo "$docker_output" | tail -n 2
+        
+        if [ $retry_count -lt $max_retries ]; then
+            log_message "INFO" "Nouvelle tentative dans 5 secondes..."
+            sleep 5
+        fi
+    done
+
+    # Si on arrive ici, les 3 tentatives ont échoué
+    log_message "ERROR" "Échec après $max_retries tentatives. Vérification du besoin de redéploiement..."
+    
+    if [ "$REDEPLOY_ON_MISSING_CONTAINER" = "true" ]; then
+        log_message "INFO" "Tentative de secours ultime : redéploiement via Dockhand..."
+        if redeploy_stack_via_dockhand; then
+            sleep 10
+            if is_container_running "$QBITTORRENT_CONTAINER"; then
+                log_message "SUCCESS" "$QBITTORRENT_CONTAINER est enfin opérationnel"
+                return 0
+            fi
+        fi
+    fi
+    
+    return 1
 }
 
 # Fonction pour vérifier l'état de qBittorrent
